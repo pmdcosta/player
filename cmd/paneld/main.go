@@ -18,8 +18,8 @@ func main() {
 	logger = log.NewContext(logger).With("ts", log.DefaultTimestampUTC, "caller", log.DefaultCaller)
 
 	// create client
-	flags := map[string]bool{"no-resume-playback": true, "no-input-terminal": true, "quiet": true, "keep-open": true, "ytdl": true, "border": false, "loop": true}
-	options := map[string]string{"hwdec": "vdpau", "screen": "2"}
+	flags := map[string]bool{"no-resume-playback": true, "no-input-terminal": true, "quiet": true, "keep-open": true, "ytdl": true, "border": false, "loop": true, "fullscreen": true}
+	options := map[string]string{"hwdec": "vdpau"}
 	client := mpv.NewClient(logger)
 	err := client.Open(flags, options)
 	if err != nil {
@@ -39,7 +39,8 @@ func main() {
 	router.HandleFunc("/seek/{value}", Seek).Methods("GET")
 	router.HandleFunc("/next", Next).Methods("GET")
 	router.HandleFunc("/pre", Previous).Methods("GET")
-	router.PathPrefix("/").Handler(http.StripPrefix("/", http.FileServer(http.Dir("assets/"))))
+	router.HandleFunc("/osd/{value}", Osd).Methods("GET")
+	router.PathPrefix("/").Handler(http.StripPrefix("/", http.FileServer(http.Dir("/home/pmdcosta/Workspace/Go/src/github.com/pmdcosta/player/assets/"))))
 
 	panic(http.ListenAndServe(":8000", router))
 
@@ -88,6 +89,15 @@ func Next(w http.ResponseWriter, req *http.Request) {
 
 func Previous(w http.ResponseWriter, req *http.Request) {
 	err := Player.SetCommand([]string{"playlist-prev"})
+	if err != nil {
+		logger.Log("err", err)
+		return
+	}
+}
+
+func Osd(w http.ResponseWriter, req *http.Request) {
+	value := mux.Vars(req)["value"]
+	err := Player.SetCommand([]string{"osd", value})
 	if err != nil {
 		logger.Log("err", err)
 		return
