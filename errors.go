@@ -10,6 +10,20 @@ const (
 	ErrMpvPlayer    = Error("received mpv player error")
 )
 
+// HTTP errors.
+const (
+	ErrHTTPFailed = Error("failed to start server")
+	ErrHTTPCert   = Error("failed to load certificates")
+	ErrHTTPAPI    = Error("unknown API error")
+)
+
+// General errors.
+const (
+	ErrInvalidJSON  = Error("invalid json")
+	ErrUnauthorized = Error("unauthorized")
+	ErrInternal     = Error("internal error")
+)
+
 // Error represents a Box error.
 type Error string
 

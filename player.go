@@ -6,8 +6,8 @@ type Client interface {
 	Close() error
 }
 
-// Mpv represents a service for managing the media player.
-type Mpv interface {
+// PlayerService represents a service for managing the media player.
+type PlayerService interface {
 	SetCommand(cmd ...string) error
 	SetOption(key, value string) error
 	SetProperty(key, value string) error

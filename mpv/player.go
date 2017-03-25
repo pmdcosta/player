@@ -1,6 +1,6 @@
 package mpv
 
-// Event mpv event types.
+// Event ps event types.
 type Event int
 
 const (
@@ -16,42 +16,42 @@ const (
 	MpvEventIdle Event = 11
 )
 
-// Mpv represents a service for managing mpv.
-type Mpv struct {
+// PlayerService represents a service for managing ps.
+type PlayerService struct {
 	client  *Client
 	playing bool
 }
 
 // SetCommand sets the command on the player.
-func (mpv *Mpv) SetCommand(cmd ...string) error {
-	mpv.client.logger.Log("msg", "setCommand", "cmd", cmd[0], "value", cmd[1])
-	return mpv.client.sendCommand(cmd)
+func (ps *PlayerService) SetCommand(cmd ...string) error {
+	ps.client.logger.Log("msg", "setCommand", "cmd", cmd[0], "value", cmd[1])
+	return ps.client.sendCommand(cmd)
 }
 
 // SetOption sets the options on the player.
-func (mpv *Mpv) SetOption(key, value string) error {
-	mpv.client.logger.Log("msg", "setOption", "key", key, "value", value)
-	return mpv.client.setOptionString(key, value)
+func (ps *PlayerService) SetOption(key, value string) error {
+	ps.client.logger.Log("msg", "setOption", "key", key, "value", value)
+	return ps.client.setOptionString(key, value)
 }
 
 // SetProperty sets the property on the player.
-func (mpv *Mpv) SetProperty(key, value string) error {
-	mpv.client.logger.Log("msg", "setProperty", "key", key, "value", value)
-	return mpv.client.setProperty(key, value)
+func (ps *PlayerService) SetProperty(key, value string) error {
+	ps.client.logger.Log("msg", "setProperty", "key", key, "value", value)
+	return ps.client.setProperty(key, value)
 }
 
-// GetEvents handles mpv player events.
-func (mpv *Mpv) GetEvents() {
-	for event := range mpv.client.eventsChannel {
+// GetEvents handles ps player events.
+func (ps *PlayerService) GetEvents() {
+	for event := range ps.client.eventsChannel {
 		switch event {
 		case MpvEventSetPropertyReply:
 		case MpvEventCommandReply:
 		case MpvEventStartFile:
-			mpv.client.logger.Log("msg", "mpv player event received", "event", "START_FILE")
-			mpv.playing = true
+			ps.client.logger.Log("msg", "player event received", "event", "START_FILE")
+			ps.playing = true
 		case MpvEventEndFile:
-			mpv.client.logger.Log("msg", "mpv player event received", "event", "END_FILE")
-			mpv.playing = false
+			ps.client.logger.Log("msg", "player event received", "event", "END_FILE")
+			ps.playing = false
 		case MpvEventIdle:
 		default:
 			continue

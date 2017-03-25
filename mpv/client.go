@@ -35,7 +35,7 @@ type Client struct {
 	mainloopExit chan struct{}
 
 	// player service.
-	player Mpv
+	playerService PlayerService
 
 	// events channel.
 	eventsChannel chan Event
@@ -46,13 +46,13 @@ func NewClient(log log.Logger) *Client {
 	c := &Client{
 		logger: log,
 	}
-	c.player.client = c
-	c.player.playing = false
+	c.playerService.client = c
+	c.playerService.playing = false
 	return c
 }
 
-// Mpv returns the player service associated with the client.
-func (mpv *Client) Mpv() player.Mpv { return &mpv.player }
+// PlayerService returns the player service associated with the client.
+func (mpv *Client) PlayerService() player.PlayerService { return &mpv.playerService }
 
 // Open starts the player.
 func (mpv *Client) Open(flags map[string]bool, options map[string]string) error {
@@ -71,7 +71,7 @@ func (mpv *Client) Open(flags map[string]bool, options map[string]string) error 
 
 	// set mpv startup flags.
 	for k, v := range flags {
-		if err := mpv.setOptionFlag(k, v); err {
+		if err := mpv.setOptionFlag(k, v); err != nil {
 			mpv.logger.Log("err", player.ErrMpvSetOption, "msg", err.Error())
 			return err
 		}
@@ -85,7 +85,7 @@ func (mpv *Client) Open(flags map[string]bool, options map[string]string) error 
 
 	// set mpv startup options.
 	for k, v := range options {
-		if err := mpv.setOptionString(k, v); err {
+		if err := mpv.setOptionString(k, v); err != nil {
 			mpv.logger.Log("err", player.ErrMpvSetOption, "msg", err.Error())
 			return err
 		}
