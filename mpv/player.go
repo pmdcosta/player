@@ -4,50 +4,55 @@ package mpv
 type Event int
 
 const (
-	MPV_EVENT_SET_PROPERTY_REPLY Event = 4  // Reply to a set_property request
-	MPV_EVENT_COMMAND_REPLY      Event = 5  // Reply to a command request
-	MPV_EVENT_START_FILE         Event = 6  // Notification before playback start of a file
-	MPV_EVENT_END_FILE           Event = 7  // Notification after playback end
-	MPV_EVENT_IDLE               Event = 11 // Idle mode was entered.
+	// MpvEventSetPropertyReply is a reply to a set_property request.
+	MpvEventSetPropertyReply Event = 4
+	// MpvEventCommandReply is areply to a command request.
+	MpvEventCommandReply Event = 5
+	// MpvEventStartFile is a notification before playback start of a file.
+	MpvEventStartFile Event = 6
+	// MpvEventEndFile is a notification after playback end.
+	MpvEventEndFile Event = 7
+	// MpvEventIdle signifies an idle mode was entered.
+	MpvEventIdle Event = 11
 )
 
-// Player represents a service for managing mpv.
-type Player struct {
+// Mpv represents a service for managing mpv.
+type Mpv struct {
 	client  *Client
 	playing bool
 }
 
 // SetCommand sets the command on the player.
-func (mpv *Player) SetCommand(cmd []string) error {
-	mpv.client.logger.Log("msg", "setCommand", "cmd", cmd[0])
+func (mpv *Mpv) SetCommand(cmd ...string) error {
+	mpv.client.logger.Log("msg", "setCommand", "cmd", cmd[0], "value", cmd[1])
 	return mpv.client.sendCommand(cmd)
 }
 
-// SetOptions sets the options on the player.
-func (mpv *Player) SetOption(values []string) error {
-	mpv.client.logger.Log("msg", "setOption", "key", values[0], "value", values[1])
-	return mpv.client.setOptionString(values[0], values[1])
+// SetOption sets the options on the player.
+func (mpv *Mpv) SetOption(key, value string) error {
+	mpv.client.logger.Log("msg", "setOption", "key", key, "value", value)
+	return mpv.client.setOptionString(key, value)
 }
 
-// SetProperty sets the options on the player.
-func (mpv *Player) SetProperty(values []string) error {
-	mpv.client.logger.Log("msg", "setOption", "key", values[0], "value", values[1])
-	return mpv.client.setProperty(values[0], values[1])
+// SetProperty sets the property on the player.
+func (mpv *Mpv) SetProperty(key, value string) error {
+	mpv.client.logger.Log("msg", "setProperty", "key", key, "value", value)
+	return mpv.client.setProperty(key, value)
 }
 
 // GetEvents handles mpv player events.
-func (mpv *Player) GetEvents() {
+func (mpv *Mpv) GetEvents() {
 	for event := range mpv.client.eventsChannel {
 		switch event {
-		case MPV_EVENT_SET_PROPERTY_REPLY:
-		case MPV_EVENT_COMMAND_REPLY:
-		case MPV_EVENT_START_FILE:
+		case MpvEventSetPropertyReply:
+		case MpvEventCommandReply:
+		case MpvEventStartFile:
 			mpv.client.logger.Log("msg", "mpv player event received", "event", "START_FILE")
 			mpv.playing = true
-		case MPV_EVENT_END_FILE:
+		case MpvEventEndFile:
 			mpv.client.logger.Log("msg", "mpv player event received", "event", "END_FILE")
 			mpv.playing = false
-		case MPV_EVENT_IDLE:
+		case MpvEventIdle:
 		default:
 			continue
 		}

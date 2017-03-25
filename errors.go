@@ -2,10 +2,12 @@ package player
 
 // mpv errors.
 const (
-	ErrAlreadyRunning = Error("already running")
-	ErrAlreadyClosed  = Error("already closed")
-	ErrMpvApiError    = Error("mpv api error")
-	ErrCalloc         = Error("failed to allocate memory")
+	ErrMpvRunning   = Error("player is already running")
+	ErrMpvClosed    = Error("player is already closed")
+	ErrMpvSetOption = Error("failed to set player option")
+	ErrMpvInit      = Error("failed to initialize player")
+	ErrMpvCalloc    = Error("failed to allocate memory")
+	ErrMpvPlayer    = Error("received mpv player error")
 )
 
 // Error represents a Box error.

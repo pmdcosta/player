@@ -16,33 +16,32 @@ import "unsafe"
 
 import (
 	"github.com/go-kit/kit/log"
-	box "github.com/pmdcosta/player"
+	"github.com/pmdcosta/player"
 	"sync"
 )
 
 // Client represents a client to the underlying video player.
 type Client struct {
-	// mpv handler
+	logger log.Logger
+
+	// mpv handler.
 	handle *C.mpv_handle
 
-	// player state
+	// player state.
 	running      bool
 	runningMutex sync.Mutex
 
-	// synchronize close
+	// synchronize closing the client.
 	mainloopExit chan struct{}
 
-	// Player Service
-	player Player
+	// player service.
+	player Mpv
 
-	// Events channel
+	// events channel.
 	eventsChannel chan Event
-
-	// logger
-	logger log.Logger
 }
 
-// NewClient returns a new instance of Server.
+// NewClient returns a new instance of Client.
 func NewClient(log log.Logger) *Client {
 	c := &Client{
 		logger: log,
@@ -52,41 +51,42 @@ func NewClient(log log.Logger) *Client {
 	return c
 }
 
-// Player returns the player service associated with the client.
-func (mpv *Client) Player() box.Player { return &mpv.player }
+// Mpv returns the player service associated with the client.
+func (mpv *Client) Mpv() player.Mpv { return &mpv.player }
 
-// Open starts player.
+// Open starts the player.
 func (mpv *Client) Open(flags map[string]bool, options map[string]string) error {
 	// check if player is already running.
 	if mpv.handle != nil || mpv.running {
-		mpv.logger.Log("err", "mpv player already running")
-		return box.ErrAlreadyRunning
+		mpv.logger.Log("err", player.ErrMpvRunning)
+		return player.ErrMpvRunning
 	}
 
 	// creates mpv player.
+	mpv.runningMutex.Lock()
 	mpv.running = true
+	mpv.runningMutex.Unlock()
 	mpv.mainloopExit = make(chan struct{})
 	mpv.handle = C.mpv_create()
 
 	// set mpv startup flags.
 	for k, v := range flags {
-		err := mpv.setOptionFlag(k, v)
-		if err != nil {
+		if err := mpv.setOptionFlag(k, v); err {
+			mpv.logger.Log("err", player.ErrMpvSetOption, "msg", err.Error())
 			return err
 		}
 	}
 
 	// initializes mpv player.
-	status := C.mpv_initialize(mpv.handle)
-	if int(status) != 0 {
-		mpv.logger.Log("err", "failed to initialize mpv player")
-		return box.ErrMpvApiError
+	if int(C.mpv_initialize(mpv.handle)) != 0 {
+		mpv.logger.Log("err", player.ErrMpvInit)
+		return player.ErrMpvInit
 	}
 
 	// set mpv startup options.
 	for k, v := range options {
-		err := mpv.setOptionString(k, v)
-		if err != nil {
+		if err := mpv.setOptionString(k, v); err {
+			mpv.logger.Log("err", player.ErrMpvSetOption, "msg", err.Error())
 			return err
 		}
 	}
@@ -104,8 +104,8 @@ func (mpv *Client) Close() error {
 	// checks if the player is still running.
 	mpv.runningMutex.Lock()
 	if !mpv.running {
-		mpv.logger.Log("err", "mpv player already terminated")
-		return box.ErrAlreadyClosed
+		mpv.logger.Log("err", player.ErrMpvClosed)
+		return player.ErrMpvClosed
 	}
 	mpv.running = false
 	mpv.runningMutex.Unlock()
@@ -153,8 +153,8 @@ func (mpv *Client) setOption(key string, format C.mpv_format, value unsafe.Point
 
 	err := C.mpv_set_option(mpv.handle, cKey, format, value)
 	if int(err) != 0 {
-		mpv.logger.Log("err", "failed to set option", "status", C.GoString(C.mpv_error_string(err)))
-		return box.ErrMpvApiError
+		mpv.logger.Log("err", player.ErrMpvSetOption, "status", C.GoString(C.mpv_error_string(err)))
+		return player.ErrMpvSetOption
 	}
 	return nil
 }
@@ -163,8 +163,8 @@ func (mpv *Client) setOption(key string, format C.mpv_format, value unsafe.Point
 func (mpv *Client) sendCommand(command []string) error {
 	cArray := C.makeCharArray(C.int(len(command) + 1))
 	if cArray == nil {
-		mpv.logger.Log("err", "failed to allocate memory")
-		return box.ErrCalloc
+		mpv.logger.Log("err", player.ErrMpvCalloc)
+		return player.ErrMpvCalloc
 	}
 	defer C.free(unsafe.Pointer(cArray))
 
@@ -176,8 +176,8 @@ func (mpv *Client) sendCommand(command []string) error {
 
 	err := C.mpv_command_async(mpv.handle, 0, cArray)
 	if int(err) != 0 {
-		mpv.logger.Log("err", "failed to send command", "status", C.GoString(C.mpv_error_string(err)))
-		return box.ErrMpvApiError
+		mpv.logger.Log("err", player.ErrMpvSetOption, "status", C.GoString(C.mpv_error_string(err)))
+		return player.ErrMpvSetOption
 	}
 	return nil
 }
@@ -191,8 +191,8 @@ func (mpv *Client) setProperty(name, value string) error {
 
 	err := C.mpv_set_property_async(mpv.handle, 1, cName, C.MPV_FORMAT_STRING, unsafe.Pointer(&cValue))
 	if int(err) != 0 {
-		mpv.logger.Log("err", "failed to set property", "status", C.GoString(C.mpv_error_string(err)))
-		return box.ErrMpvApiError
+		mpv.logger.Log("err", player.ErrMpvSetOption, "status", C.GoString(C.mpv_error_string(err)))
+		return player.ErrMpvSetOption
 	}
 	return nil
 }
@@ -204,7 +204,7 @@ func (mpv *Client) eventHandler() {
 		// negative timeout means infinite timeout.
 		event := C.mpv_wait_event(mpv.handle, -1)
 		if event.error != 0 {
-			mpv.logger.Log("err", "received error from mpv player")
+			mpv.logger.Log("err", player.ErrMpvPlayer, "event", event)
 			panic(event)
 		}
 
