@@ -12,159 +12,174 @@ package mpv
 //     a[i] = s;
 // }
 import "C"
-import "unsafe"
-
 import (
-	"github.com/go-kit/kit/log"
-	box "github.com/pmdcosta/player"
-	"sync"
+	"unsafe"
 )
 
-// Client represents a client to the underlying video player.
+/*
+	Interacting with MPV (the video player) requires the libmpv lib.
+	Documentation @ https://mpv.io/manual/stable/
+*/
+
+import (
+	log "github.com/Sirupsen/logrus"
+	"github.com/pmdcosta/player"
+	"sync"
+	"time"
+)
+
+// Client represents a client to for playing videos.
 type Client struct {
-	// mpv handler
+	// package logger.
+	logger *log.Entry
+
+	// underlying mpv client.
 	handle *C.mpv_handle
 
-	// player state
-	running      bool
-	runningMutex sync.Mutex
+	// video player state.
+	running bool
+	lock    sync.Mutex
 
-	// synchronize close
-	mainloopExit chan struct{}
+	// mpv events stream.
+	events chan Event
 
-	// Player Service
-	player Player
+	// gracefully shutdown.
+	quitChan chan struct{}
 
-	// Events channel
-	eventsChannel chan Event
-
-	// logger
-	logger log.Logger
+	// service for interacting with the video player.
+	service Service
 }
 
-// NewClient returns a new instance of Server.
-func NewClient(log log.Logger) *Client {
+// NewClient returns a new instance of Client.
+func NewClient() *Client {
 	c := &Client{
-		logger: log,
+		logger:   log.WithFields(log.Fields{"package": "player"}),
+		events:   make(chan Event, 5),
+		quitChan: make(chan struct{}),
 	}
-	c.player.client = c
-	c.player.playing = false
+	c.service.client = c
+
+	// start listening for player events.
+	go c.service.getEvents()
 	return c
 }
 
-// Player returns the player service associated with the client.
-func (mpv *Client) Player() box.Player { return &mpv.player }
+// Open starts client handler.
+func (c *Client) Open() error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
 
-// Open starts player.
-func (mpv *Client) Open(flags map[string]bool, options map[string]string) error {
 	// check if player is already running.
-	if mpv.handle != nil || mpv.running {
-		mpv.logger.Log("err", "mpv player already running")
-		return box.ErrAlreadyRunning
+	if c.handle != nil || c.running {
+		c.logger.Error(ErrAlreadyRunning)
+		return ErrAlreadyRunning
+	}
+	c.running = true
+
+	// creates the mpv player.
+	c.handle = C.mpv_create()
+
+	// set mpv configuration flag.
+	if err := c.setOptionFlag("config", true); err != nil {
+		return err
 	}
 
-	// creates mpv player.
-	mpv.running = true
-	mpv.mainloopExit = make(chan struct{})
-	mpv.handle = C.mpv_create()
-
-	// set mpv startup flags.
-	for k, v := range flags {
-		err := mpv.setOptionFlag(k, v)
-		if err != nil {
-			return err
-		}
-	}
-
-	// initializes mpv player.
-	status := C.mpv_initialize(mpv.handle)
+	// start the mpv player.
+	status := C.mpv_initialize(c.handle)
 	if int(status) != 0 {
-		mpv.logger.Log("err", "failed to initialize mpv player")
-		return box.ErrMpvApiError
+		c.logger.WithFields(log.Fields{"status": status}).Error(ErrInitPlayer)
+		return ErrInitPlayer
 	}
 
-	// set mpv startup options.
-	for k, v := range options {
-		err := mpv.setOptionString(k, v)
-		if err != nil {
-			return err
-		}
-	}
+	// starts listening for mpv events.
+	go c.eventHandler()
 
-	// starts listening for events.
-	mpv.eventsChannel = make(chan Event)
-	go mpv.eventHandler()
-
-	mpv.logger.Log("msg", "mpv player started")
+	c.logger.Info("mpv player started")
 	return nil
 }
 
 // Close terminates player.
-func (mpv *Client) Close() error {
+func (c *Client) Close() error {
 	// checks if the player is still running.
-	mpv.runningMutex.Lock()
-	if !mpv.running {
-		mpv.logger.Log("err", "mpv player already terminated")
-		return box.ErrAlreadyClosed
+	c.lock.Lock()
+	if !c.running {
+		c.logger.Info(ErrNotRunning)
+		c.lock.Unlock()
+		return ErrNotRunning
 	}
-	mpv.running = false
-	mpv.runningMutex.Unlock()
+	c.running = false
+	c.lock.Unlock()
 
 	// waits until the main loop has exited.
-	C.mpv_wakeup(mpv.handle)
-	<-mpv.mainloopExit
+	C.mpv_wakeup(c.handle)
+	select {
+	case _, ok := <-c.quitChan:
+		if !ok {
+			c.quitChan = nil
+		}
+	}
 
-	// terminates the mpv player.
-	// blocks until the player has been fully brought down.
-	handle := mpv.handle
-	mpv.handle = nil
-	C.mpv_terminate_destroy(handle)
+	// terminates the mpv player and waits until the player has been fully brought down.
+	C.mpv_terminate_destroy(c.handle)
+	c.handle = nil
 
-	mpv.logger.Log("msg", "mpv player terminated")
+	time.Sleep(1 * time.Second)
+	c.logger.Info("mpv player stopped")
 	return nil
 }
 
 // setOptionFlag passes a boolean flag to mpv.
-func (mpv *Client) setOptionFlag(key string, value bool) error {
+func (c *Client) setOptionFlag(key string, value bool) error {
 	cValue := C.int(0)
 	if value {
 		cValue = 1
 	}
-	return mpv.setOption(key, C.MPV_FORMAT_FLAG, unsafe.Pointer(&cValue))
+	c.logger.WithFields(log.Fields{"key": key, "value": value}).Debug("setting option")
+	return c.setOption(key, C.MPV_FORMAT_FLAG, unsafe.Pointer(&cValue))
 }
 
 // setOptionInt passes an integer option to mpv.
-func (mpv *Client) setOptionInt(key string, value int) error {
+func (c *Client) setOptionInt(key string, value int) error {
 	cValue := C.int64_t(value)
-	return mpv.setOption(key, C.MPV_FORMAT_INT64, unsafe.Pointer(&cValue))
+	c.logger.WithFields(log.Fields{"key": key, "value": value}).Debug("setting option")
+	return c.setOption(key, C.MPV_FORMAT_INT64, unsafe.Pointer(&cValue))
 }
 
 // setOptionString passes a string option to mpv.
-func (mpv *Client) setOptionString(key, value string) error {
+func (c *Client) setOptionString(key, value string) error {
 	cValue := C.CString(value)
 	defer C.free(unsafe.Pointer(cValue))
-	return mpv.setOption(key, C.MPV_FORMAT_STRING, unsafe.Pointer(&cValue))
+	c.logger.WithFields(log.Fields{"key": key, "value": value}).Debug("setting option")
+	return c.setOption(key, C.MPV_FORMAT_STRING, unsafe.Pointer(&cValue))
 }
 
 // setOption is a generic function to pass options to mpv.
-func (mpv *Client) setOption(key string, format C.mpv_format, value unsafe.Pointer) error {
+func (c *Client) setOption(key string, format C.mpv_format, value unsafe.Pointer) error {
+	if !c.running {
+		c.logger.WithFields(log.Fields{"err": ErrNotRunning}).Debug(ErrSetOption)
+		return ErrNotRunning
+	}
+
 	cKey := C.CString(key)
 	defer C.free(unsafe.Pointer(cKey))
-
-	err := C.mpv_set_option(mpv.handle, cKey, format, value)
-	if int(err) != 0 {
-		mpv.logger.Log("err", "failed to set option", "status", C.GoString(C.mpv_error_string(err)))
-		return box.ErrMpvApiError
+	if err := C.mpv_set_option(c.handle, cKey, format, value); int(err) != 0 {
+		c.logger.WithFields(log.Fields{"key": key, "status": C.GoString(C.mpv_error_string(err))}).Error(ErrSetOption)
+		return ErrSetOption
 	}
 	return nil
 }
 
 // sendCommand sends a command to the libmpv player.
-func (mpv *Client) sendCommand(command []string) error {
+func (c *Client) sendCommand(command []string) error {
+	if !c.running {
+		c.logger.WithFields(log.Fields{"err": ErrNotRunning}).Debug(ErrSetCommand)
+		return ErrNotRunning
+	}
+
 	cArray := C.makeCharArray(C.int(len(command) + 1))
 	if cArray == nil {
-		mpv.logger.Log("err", "failed to allocate memory")
-		return box.ErrCalloc
+		c.logger.WithFields(log.Fields{"commands": command}).Error(ErrMalloc)
+		return ErrMalloc
 	}
 	defer C.free(unsafe.Pointer(cArray))
 
@@ -174,51 +189,71 @@ func (mpv *Client) sendCommand(command []string) error {
 		defer C.free(unsafe.Pointer(cStr))
 	}
 
-	err := C.mpv_command_async(mpv.handle, 0, cArray)
-	if int(err) != 0 {
-		mpv.logger.Log("err", "failed to send command", "status", C.GoString(C.mpv_error_string(err)))
-		return box.ErrMpvApiError
+	if err := C.mpv_command_async(c.handle, 0, cArray); int(err) != 0 {
+		c.logger.WithFields(log.Fields{"commands": command, "status": C.GoString(C.mpv_error_string(err))}).Error(ErrSetCommand)
+		return ErrSetCommand
 	}
+
+	c.logger.WithFields(log.Fields{"command": command}).Debug("setting command")
 	return nil
 }
 
 // setProperty sets mpv property option.
-func (mpv *Client) setProperty(name, value string) error {
+func (c *Client) setProperty(name, value string) error {
+	if !c.running {
+		c.logger.WithFields(log.Fields{"err": ErrNotRunning}).Debug(ErrSetProperty)
+		return ErrNotRunning
+	}
+
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	cValue := C.CString(value)
 	defer C.free(unsafe.Pointer(cValue))
 
-	err := C.mpv_set_property_async(mpv.handle, 1, cName, C.MPV_FORMAT_STRING, unsafe.Pointer(&cValue))
-	if int(err) != 0 {
-		mpv.logger.Log("err", "failed to set property", "status", C.GoString(C.mpv_error_string(err)))
-		return box.ErrMpvApiError
+	if err := C.mpv_set_property_async(c.handle, 1, cName, C.MPV_FORMAT_STRING, unsafe.Pointer(&cValue)); int(err) != 0 {
+		c.logger.WithFields(log.Fields{"key": name, "value": value, "status": C.GoString(C.mpv_error_string(err))}).Error(ErrSetProperty)
+		return ErrSetProperty
 	}
+	c.logger.WithFields(log.Fields{"key": name, "value": value}).Debug("setting property")
 	return nil
 }
 
-// eventHandler waits for mpv events and sends to the player.
-func (mpv *Client) eventHandler() {
+// eventHandler waits for mpv events and sends them to the player.
+func (c *Client) eventHandler() {
 	for {
-		// wait until there is an event.
-		// negative timeout means infinite timeout.
-		event := C.mpv_wait_event(mpv.handle, -1)
+		// wait for an mpv event.
+		event := C.mpv_wait_event(c.handle, -1)
 		if event.error != 0 {
-			mpv.logger.Log("err", "received error from mpv player")
-			panic(event)
+			c.logger.WithFields(log.Fields{"err": event.error}).Error(ErrEventError)
+			continue
 		}
 
-		// terminate event channel.
-		mpv.runningMutex.Lock()
-		running := mpv.running
-		mpv.runningMutex.Unlock()
+		// check if player still running and close otherwise.
+		c.lock.Lock()
+		running := c.running
+		c.lock.Unlock()
+
 		if !running {
-			close(mpv.eventsChannel)
-			mpv.mainloopExit <- struct{}{}
+			c.quitChan <- struct{}{}
 			return
 		}
 
 		// send event to player.
-		mpv.eventsChannel <- Event(event.event_id)
+		c.events <- Event(event.event_id)
 	}
 }
+
+// Event mpv player event types.
+type Event int
+
+// Event types
+const (
+	SetPropertyReply Event = 4  // Reply to a set_property request.
+	CommandReply           = 5  // Reply to a command request.
+	StartFile              = 6  // Notification before playback start of a file.
+	EndFile                = 7  // Notification after playback end.
+	Idle                   = 11 // Idle mode was entered.
+)
+
+// Service returns the service used to interact with the video player.
+func (c *Client) Service() player.Player { return &c.service }
